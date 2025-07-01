@@ -6,7 +6,9 @@
 
 #define MAX_URL 2048
 #define MAX_FILE 255
-#define MAX_REG_
+#define MAX_REG_KEY_NAME 255
+#define MAX_REG_VALUE_NAME 16383
+
 #define WIN_ERROR 0x0
 #define CONTINUE_ERROR 0x1 
 #define FAIL_ERROR 0x2
@@ -19,6 +21,9 @@ VOID TranslateErrorPrintImplStr(const char *errMsg, const char *file, int line);
 #define TranslateErrorPrintStr(errMsg) TranslateErrorPrintImplStr(errMsg, __FILE__, __LINE__);
                 
 typedef int (*ValidatorFunc)(char *arg, void *data);
+
+BOOL printHelp = TRUE;
+static BOOL shutdownFlag = FALSE;
 
 VOID TranslateError(DWORD errCode, char **pErrMessage) {
 	FormatMessageA(
@@ -112,16 +117,20 @@ BOOL LocateBinary(char *binaryPath, const char *binary, DWORD binaryPathSize) {
     return rc;
 }
 
-BOOL PromptUntilValid(const char *prompt, char* buffer, size_t bufferSize, ValidatorFunc validator, void *data) {
+BOOL PromptUntilValid(const char *prompt, char* buffer, size_t bufferSize, ValidatorFunc validator, void *data, BOOL allowDefault) {
     int rc;
     puts("");
-    while (TRUE) {
+    while (!shutdownFlag) {
         printf("TIE-Bomber(%s) > ", prompt);
         fflush(stdout);
         fgets(buffer, (int)bufferSize, stdin);
         buffer[strcspn(buffer, "\n")] = '\0';
+        if (*buffer == '\0' && allowDefault == FALSE) {
+            continue;
+        }
         if (strcmp(buffer, "q") == 0 || strcmp(buffer, "quit") == 0 || strcmp(buffer, "exit") == 0 || strcmp(buffer, "no") == 0 || strcmp(buffer, "n") == 0) {
                 printf("\n[*] Exiting...\n");
+                shutdownFlag = TRUE;
                 return FALSE;
         }
         if (validator && strcmp(buffer, "h") == 0) {
@@ -139,7 +148,9 @@ BOOL PromptUntilValid(const char *prompt, char* buffer, size_t bufferSize, Valid
         if (rc == WIN_ERROR) {
             TranslateErrorPrint(GetLastError());
             continue;
-        } else if (rc == CONTINUE_ERROR || rc == FAIL_ERROR) {
+        } else if (rc == FAIL_ERROR) { 
+            break;
+        } else if (rc == CONTINUE_ERROR) {
             continue;
         }
         break;

