@@ -6,7 +6,7 @@
 
 #define MAX_URL 2048
 #define MAX_FILE 255
-
+#define MAX_REG_
 #define WIN_ERROR 0x0
 #define CONTINUE_ERROR 0x1 
 #define FAIL_ERROR 0x2
@@ -111,4 +111,42 @@ BOOL LocateBinary(char *binaryPath, const char *binary, DWORD binaryPathSize) {
     
     return rc;
 }
+
+BOOL PromptUntilValid(const char *prompt, char* buffer, size_t bufferSize, ValidatorFunc validator, void *data) {
+    int rc;
+    puts("");
+    while (TRUE) {
+        printf("TIE-Bomber(%s) > ", prompt);
+        fflush(stdout);
+        fgets(buffer, (int)bufferSize, stdin);
+        buffer[strcspn(buffer, "\n")] = '\0';
+        if (strcmp(buffer, "q") == 0 || strcmp(buffer, "quit") == 0 || strcmp(buffer, "exit") == 0 || strcmp(buffer, "no") == 0 || strcmp(buffer, "n") == 0) {
+                printf("\n[*] Exiting...\n");
+                return FALSE;
+        }
+        if (validator && strcmp(buffer, "h") == 0) {
+            printHelp = TRUE;
+        }
+        
+        if (!validator) {
+            if (strcmp(buffer, "y") == 0 || strcmp(buffer, "yes") == 0) {
+                break;
+            }
+            continue;   
+        }    
+
+        rc = validator(buffer, data);
+        if (rc == WIN_ERROR) {
+            TranslateErrorPrint(GetLastError());
+            continue;
+        } else if (rc == CONTINUE_ERROR || rc == FAIL_ERROR) {
+            continue;
+        }
+        break;
+    }
+    puts("");
+    return TRUE;
+}
+
+
 #endif // HELPER_H

