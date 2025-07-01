@@ -6,7 +6,7 @@
 
 #define MAX_URL 2048
 #define MAX_FILE 255
-#define MAX_REG_KEY_NAME 255
+#define MAX_REG_KEY_NAME 128
 #define MAX_REG_VALUE_NAME 16383
 
 #define WIN_ERROR 0x0
@@ -97,6 +97,36 @@ BOOL ExecuteCommand(const char* command) {
         return FALSE;
     }
 
+    return TRUE;
+}
+
+BOOL CopyPayload(const char *srcPath, const char *dstPath) {
+    FILE *src = fopen(srcPath, "rb");
+    if (!src) {
+        TranslateErrorPrintStr("Failed to open source file");
+        return FALSE;
+    }
+
+    FILE *dst = fopen(dstPath, "wb");
+    if (!dst) {
+        TranslateErrorPrintStr("Failed to open destination file");
+        fclose(src);
+        return FALSE;
+    }
+
+    char buffer[4096];
+    int bytesRead;
+    while ((bytesRead = fread(buffer, 1, sizeof(buffer), src)) > 0) {
+        if (fwrite(buffer, 1, bytesRead, dst) != bytesRead) {
+            TranslateErrorPrintStr("Error writinf to destination file");
+            fclose(src);
+            fclose(dst);
+            return FALSE;
+        }
+    }
+
+    fclose(src);
+    fclose(dst);
     return TRUE;
 }
 

