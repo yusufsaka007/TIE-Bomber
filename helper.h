@@ -118,7 +118,7 @@ BOOL CopyPayload(const char *srcPath, const char *dstPath) {
     int bytesRead;
     while ((bytesRead = fread(buffer, 1, sizeof(buffer), src)) > 0) {
         if (fwrite(buffer, 1, bytesRead, dst) != bytesRead) {
-            TranslateErrorPrintStr("Error writinf to destination file");
+            TranslateErrorPrintStr("Error writing to destination file");
             fclose(src);
             fclose(dst);
             return FALSE;
