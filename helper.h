@@ -190,7 +190,7 @@ VOID PrintHelp() {
     printf("Optional arguments:\n");
     printf("  -t <TARGET PATH>    Full path where the payload should be saved.\n");
     printf("                      If omitted, name will not be changed.\n");
-    printf("  -p <PORT>           Port number to connect to (default: 4444).\n");
+    printf("  -p <PORT>           Port number to connect to (default: 80).\n");
     printf("  -s                  Use raw TCP sockets instead of HTTP or other protocols.\n");
     printf("  -P                  Enable persistence only (no download or connect).\n");
     printf("                      Note: when using -P, the -t option (target path) is required.\n\n");
