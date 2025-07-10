@@ -1,4 +1,5 @@
-# TIE-Bomber Dropper (Warning! Blinding GIF)
+# TIE-Bomber Dropper 
+### (Warning! Blinding GIF)
 
 ![img](TIE-Bombers.gif)
 
