@@ -4,7 +4,7 @@
 ![img](TIE-Bombers.gif)
 
 ## Build
-- Install ```mingw-64```
+- Install ```mingw-w64```
 ```
 sudo apt update && sudo apt install mingw-w64
 ```
