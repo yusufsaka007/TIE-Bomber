@@ -2,7 +2,17 @@
 
 ![img](TIE-Bombers.gif)
 
+## Build
+- Install ```mingw-64```
+```
+sudo apt update && sudo apt install mingw-w64
+```
+- Compile
+```
+x86_64-w64-mingw32-gcc -o TIE-Bomber.exe -s -ffunction-sections -fdata-sections -Wno-write-strings -fno-exceptions -fmerge-all-constants -static-libstdc++ -static-libgcc -lws2_32 -lurlmon -lwininet -lshlwapi TIE-Bomber.c
+```
 ## Usage
+> Place the TIE-Bomber.exe to the compromised Windows machine
 
 ```
 TIE-Bomber.exe -i <IP> -e <EXE> [options]
